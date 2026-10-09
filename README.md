@@ -1,126 +1,68 @@
-<h1><img alt="AgentEnv Framework" src="https://raw.githubusercontent.com/scaleapi/agentenv-framework/main/assets/brand/readme-banner.png"></h1>
+# AgentEnv + Vercel Sandbox
 
-[![PyPI version](https://img.shields.io/pypi/v/agentenv-framework)](https://pypi.org/project/agentenv-framework/)
-[![Python versions](https://img.shields.io/pypi/pyversions/agentenv-framework)](https://pypi.org/project/agentenv-framework/)
-[![License](https://img.shields.io/pypi/l/agentenv-framework)](https://github.com/scaleapi/agentenv-framework/blob/main/LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/scaleapi/agentenv-framework/local-backends.yml?branch=main&label=CI)](https://github.com/scaleapi/agentenv-framework/actions/workflows/local-backends.yml)
+This proof of concept adds the `vercel` sandbox provider to AgentEnv. AgentEnv runs the task, connects the agent to its environment, collects the trajectory and scores the result. Vercel provides the separate sandboxes running the environment and agent.
 
-AgentEnv Framework is a Python SDK and CLI for building, deploying and running agentic environments and the tasks that grade agents inside them. Environments are containerized servers that speak the open `agentenv-framework-protocol`; AgentEnv Framework builds them into versioned images, deploys them behind a gateway, points an agent at them, and scores what the agent did.
+The included demo exercises one complete evaluation: deploy an items environment behind a gateway with its database services, load `starting-item`, deploy a deterministic agent, ask it to add `vercel-review-complete` through MCP, and grade its response. The controller independently reads the final state, verifies the stored task and trajectory, reconnects, and tears down the successful run. The agent performs real MCP calls; it does not call a language model. This validates the integration, not model quality.
 
-**Documentation: [www.agentenvframework.com/docs](https://www.agentenvframework.com/docs)** covers environments, artifacts, agents, tasks, the registry and plugins.
+## Setup
 
-## Install
+Prerequisites: Git, Python 3.11.4 or newer, uv, Node.js and Vercel CLI 62.5.0 or newer (the demo was tested with 62.5.0). Use a Vercel project where you can create 4-vCPU/8-GB sandboxes for the build and environment, plus a 2-vCPU/4-GB agent. The demo builds Linux images in a fresh Vercel sandbox, so local Docker is not needed. Network access to the package and image registries referenced by the repository Dockerfiles is required.
 
-Both packages are on PyPI. You need Python 3.11.4 or newer and, to run environments locally, a running Docker daemon. With [uv](https://docs.astral.sh/uv/), install the `agent-env` command as a tool:
+Clone this branch to use the unreleased provider. The published PyPI package does not contain this candidate.
 
 ```bash
-uv tool install agentenv-framework
-agent-env run hello
-```
-
-`agent-env run hello` runs the built-in hello task, which needs no Docker, model or configuration. To try it without installing anything, run it with uvx:
-
-```bash
-uvx --from agentenv-framework agent-env run hello
-```
-
-Or install it with pip, into a virtualenv:
-
-```bash
-pip install agentenv-framework
-```
-
-To use the SDK in your own project, add it as a dependency with `uv add agentenv-framework`. The explorer, `agent-env up`, needs the `explorer` extra (`uv tool install 'agentenv-framework[explorer]'`, or the same extra with uvx or pip) and an `.agentenv/config.toml` in the current folder or above it; an empty one keeps every local default.
-
-A plain install runs on local stores and needs no cloud SDK. The cloud store backends are extras: `aws` for S3, Secrets Manager, DynamoDB and ECR (`pip install 'agentenv-framework[aws]'`), and `gcp` for Cloud Storage, Secret Manager, Firestore and Artifact Registry (`pip install 'agentenv-framework[gcp]'`). A config that names a backend without its extra fails, naming the extra to install.
-
-The distribution is named `agentenv-framework`, the import package is `agent_env` and the command is `agent-env`. It depends on `agentenv-framework-protocol`, whose import package is `agentenv_protocol`, and installs it too.
-
-### Sandbox providers
-
-For a complete evaluation using your existing Vercel login, follow the [Vercel Sandbox demo](examples/vercel-sandbox/README.md).
-
-The default provider runs environments and agents as containers on the local Docker daemon. The `vercel` provider runs each environment or agent in an ephemeral, Docker-capable Vercel Sandbox and exposes declared ports through public `*.vercel.run` routes. From this source checkout, install the optional extra and select it in `.agentenv/config.toml`. This provider is not yet in a published PyPI release:
-
-```bash
+git clone --branch vercel-demo https://github.com/vercel-labs/agentenv-framework.git
+cd agentenv-framework
 uv sync --frozen --extra vercel
+export AGENT_ENV_CONFIG="$PWD/examples/vercel-sandbox/config.toml"
 ```
 
-```toml
-[sandbox]
-default = "vercel"
-agent_default = "vercel"
+The dedicated config selects Vercel for environments and agents. The demo overrides the document and object stores with local stores in its output directory.
 
-[sandbox.providers.vercel.config]
-# Optional. The default managed image installs Docker and Compose v2 when apt is available;
-# a prepared image avoids that download under a restrictive network policy.
-image = "vercel/sandbox/universal"
-# region = "iad1"
-# failover_regions = ["cle1", "sfo1"]
-# network_id = "your-secure-compute-network"
-# Omit all three credential fields to use the SDK's default OIDC credentials.
-# token = "secret:vercel_token"
-# team_id = "your-team"
-# project_id = "your-project"
-```
+## Run with an existing Vercel login
 
-Credentials are resolved by AgentEnv's `env:` and `secret:` references before the provider builds its scoped Vercel SDK client; the provider never changes the process environment or makes its SDK session the active one. Each sandbox is ephemeral, its execution time follows AgentEnv's timeout, and teardown destroys the sandbox and its orphan snapshots. Vercel currently provisions 64 GB of ephemeral disk: requests above 64 GB are rejected rather than silently ignored. Resource sizing uses the smallest supported even vCPU count (or one vCPU) that covers both the requested CPU and memory (2048 MB per vCPU), up to 32 vCPUs and 64 GB at the provider-wide ceiling; the account's plan may impose lower limits.
+If needed, run `vercel login`. Choose an existing project and team that you have access to. The wrapper uses the public `vercel project token` command and passes its short-lived OIDC token only to the child process. It does not print the token or write it to disk.
 
-See the [Vercel resource limits](https://vercel.com/docs/sandbox/pricing#resource-limits) and [firewall policy](https://vercel.com/docs/sandbox/concepts/firewall) documentation. The provider treats CPU and memory requests as minimums. If a request does not already match a supported shape, AgentEnv logs both the requested and allocated CPU and memory before provisioning. For example, `cpu = 0.5` and `memory = 5000` allocate four vCPUs and 8192 MB. A disk request below 64 GB is also ignored: every sandbox receives the fixed 64 GB disk, and the provider logs the ignored request. Configure all three of `token`, `team_id`, and `project_id` for an explicit scoped token, or omit all three to continue using the SDK's OIDC credentials.
-
-Outbound policy supports AgentEnv's allow-all and allowlist forms, including hostname and CIDR entries. Vercel's custom transforms, forwarding rules, and denied CIDR exceptions are not reconstructed as ordinary allowlists: reconnect leaves such a policy unknown and image loading fails closed. At creation, public Vercel routes are added to a restricted workload's platform egress floor so it can reach another Vercel sandbox's declared route. Image and file downloads add their exact signed-URL hostnames to the current allowlist; these hosts remain allowed until the policy is replaced. A CIDR-only Vercel policy allows unrestricted DNS resolution; use domain rules to restrict DNS, or deny-all to block it.
-
-To work on agent-env itself, install from a clone with [uv](https://docs.astral.sh/uv/):
+Use a fresh output directory for each attempt; the demo refuses to overwrite an existing one. Keep the dedicated configuration selected above so unrelated settings cannot affect the demo. Do not add explicit `token`, `team_id` or `project_id` fields for this OIDC route.
 
 ```bash
-git clone https://github.com/scaleapi/agentenv-framework && cd agentenv-framework
-uv sync --extra dev
-source .venv/bin/activate
+.venv/bin/python examples/vercel-sandbox/with_vercel_login.py \
+  --scope YOUR_TEAM --project YOUR_PROJECT -- \
+  .venv/bin/python examples/vercel-sandbox/run_e2e.py \
+  --repo . --output /tmp/agentenv-vercel-e2e-run-1
 ```
 
-## Plugins
+The demo creates three temporary sandboxes: an image builder, an environment and an agent. Successful runs remove all three and verify subsequent lookups return 404. Failed runs stop and retain tracked sandboxes and record their identifiers for diagnosis. The runner also records handles reaching its termination guard during setup rollback. Failures before a handle reaches the runner can still follow the provider’s own creation-cleanup behavior. Retained resources are intentionally left for diagnosis; this demo does not automatically reap them.
 
-A package of your own can add env types, providers, task steps and stores to agent-env, and `agent-env plugin` lists, checks, adds and removes installed plugins. The [plugin docs](https://www.agentenvframework.com/docs/plugins) show how.
+The image-download fixture serves only disposable test images. Its fixed signing key is public test data; this fixture is not a production artifact store. The demo uses local SQLite and filesystem stores for run records and artifacts, and applies a restricted policy allowing the test package host and Vercel routes to the workload sandboxes. Scale's actual stores and network requirements need their own acceptance run.
 
-## Contribute, release, license
+## What passing means
 
-[CONTRIBUTING.md](https://github.com/scaleapi/agentenv-framework/blob/main/CONTRIBUTING.md) is the contributor guide: open an issue before anything larger than a bug fix, one logical change per pull request with tests, pull request titles in the form `type(scope): summary`, an approving review from a code owner (`CODEOWNERS`) and green CI. [AGENTS.md](https://github.com/scaleapi/agentenv-framework/blob/main/AGENTS.md) is the repository map and conventions file for contributors and coding agents.
+Run with normal Python execution; the runner refuses `python -O` because its assertions are acceptance checks.
 
-### Documentation map
+Expected final output:
 
-| Document | Covers |
-|---|---|
-| [www.agentenvframework.com/docs](https://www.agentenvframework.com/docs) | the user guide: environments, artifacts, agents, tasks, the registry and plugins |
-| [`packages/agentenv-protocol/README.md`](https://github.com/scaleapi/agentenv-framework/blob/main/packages/agentenv-protocol/README.md) | wire contract, environment server SDK, A2A agent framework |
-| [`CONTRIBUTING.md`](https://github.com/scaleapi/agentenv-framework/blob/main/CONTRIBUTING.md) | development setup, test tiers, CI jobs, pull request rules |
-| [`AGENTS.md`](https://github.com/scaleapi/agentenv-framework/blob/main/AGENTS.md) | repository map, configuration and extension-point summary, conventions for contributors and coding agents |
-| [`SECURITY.md`](https://github.com/scaleapi/agentenv-framework/blob/main/SECURITY.md) | private vulnerability reporting and supported versions |
-| [`CODE_OF_CONDUCT.md`](https://github.com/scaleapi/agentenv-framework/blob/main/CODE_OF_CONDUCT.md) | Contributor Covenant |
-| [`.agentenv/config.example.toml`](https://github.com/scaleapi/agentenv-framework/blob/main/.agentenv/config.example.toml) | the all-local configuration to copy |
-| [`.env.example`](https://github.com/scaleapi/agentenv-framework/blob/main/.env.example) | a commented reference of the `AGENT_ENV_*` variables; agent-env never loads this file, export what you need yourself. Its `AGENT_ENV_ENVIRONMENT` line is read only by an installed plugin, never by agent-env |
-
-### Versioning and compatibility
-
-The `agentenv-framework` distribution and `agentenv-framework-protocol` are versioned separately (`0.9.x` and `0.1.x` today), both in their `pyproject.toml`; agent-env releases carry a `vX.Y.Z` tag, and agentenv-framework-protocol is bumped in the same commit and has no separate tag today. There is no `agent_env.__version__` attribute; `agent-env --version` prints the installed version. Protocol extensions carry their version in the URI (`urn:agentenv:clock/v1`, `urn:agentenv:agent-config/v1`, `urn:agentenv:trajectory/v1`). One version can take more than one request shape: under `v1` the skill, trajectory, snapshot and changelog extensions accept object-transfer requests next to their older shapes, and the request field lists on an agent's card say which ones that agent takes. Renamed CLI commands are removed outright; no deprecated aliases exist at this version. A pull request that breaks the classes and entry points plugins build on fails CI unless its title marks the break with `!`; beyond that, a written compatibility and deprecation policy does not exist yet.
-
-### Releases
-
-A release is a version bump in both `pyproject.toml` files plus a `vX.Y.Z` tag. Maintainers cut releases: the bump is automated when a labelled pull request merges, so contributors do not edit `version` or push tags (see the Releases section of [CONTRIBUTING.md](https://github.com/scaleapi/agentenv-framework/blob/main/CONTRIBUTING.md)). Each release publishes both packages to PyPI and gets a [GitHub release](https://github.com/scaleapi/agentenv-framework/releases) whose notes list the pull requests merged since the previous one; there is no `CHANGELOG.md`.
-
-### Support, security, license
-
-Ask questions in [Discussions Q&A](https://github.com/scaleapi/agentenv-framework/discussions/categories/q-a), and report bugs with the [bug report form](https://github.com/scaleapi/agentenv-framework/issues/new?template=bug_report.yml). Report vulnerabilities privately through the contact in [SECURITY.md](https://github.com/scaleapi/agentenv-framework/blob/main/SECURITY.md), not in public issues; only the latest release is supported, so reproduce against it first. Contributors follow [CONTRIBUTING.md](https://github.com/scaleapi/agentenv-framework/blob/main/CONTRIBUTING.md) and the [Code of Conduct](https://github.com/scaleapi/agentenv-framework/blob/main/CODE_OF_CONDUCT.md); every pull request needs a code-owner review. agent-env and agentenv-framework-protocol are licensed under the Apache License 2.0; see [`LICENSE`](https://github.com/scaleapi/agentenv-framework/blob/main/LICENSE) and [`NOTICE`](https://github.com/scaleapi/agentenv-framework/blob/main/NOTICE). Their third-party dependencies and those dependencies' licenses are listed in [`THIRD_PARTY_NOTICES.md`](https://github.com/scaleapi/agentenv-framework/blob/main/THIRD_PARTY_NOTICES.md).
-
-## Citation
-
-To cite AgentEnv Framework, use the metadata in [`CITATION.cff`](https://github.com/scaleapi/agentenv-framework/blob/main/CITATION.cff). GitHub's **Cite this repository** button in the repository sidebar exports it as APA or BibTeX:
-
-```bibtex
-@software{agentenv_framework,
-  author = {Arakelyan, Edgar and Polakam, Tejas and Singhal, Pratyush},
-  title = {AgentEnv Framework},
-  year = {2026},
-  url = {https://github.com/scaleapi/agentenv-framework},
-  license = {Apache-2.0}
-}
+```text
+END-TO-END EVALUATION PASSED: score 1
 ```
+
+The output folder retains:
+
+- `success.json`: final pass, score, run identifier and cleanup assertions.
+- `task.json`, `task-instance.json` and `context.json`: the five task steps and recorded result.
+- `environment-state.json`: exactly `starting-item` and `vercel-review-complete`.
+- `objects/`: collected task artifacts, including the agent trajectory.
+- `resources.json`, `images.json` and `source-hashes.json`: resource, image and source provenance.
+- `build.stdout`, `build.stderr` and `build-command.json`: image-build evidence.
+
+The stdout/stderr stream can also be redirected to a local log. Output folders contain deployment coordinates and private local paths; review them before sharing. Keep these generated outputs outside the checkout.
+
+## Review scope
+
+The integration remains in-tree as requested, with optional Python SDK dependencies. CPU and memory are minimum requests rounded to supported shapes; fixed disk sizing is logged. OIDC and explicit configuration credentials are supported. This POC covers ephemeral runs and active reconnect. Persistent resume, credential brokering and model-quality benchmarking are separate work.
+
+Recorded follow-ups include cleanup of commands still running during teardown, upload retry diagnostics, resource log severity and readiness behavior. Production workload acceptance, actual stores, CPU/memory semantics, optional OIDC and maintenance ownership remain for Scale to confirm.
+
+See [validation results](examples/vercel-sandbox/RESULTS.md) for the validation scope and remaining acceptance work.
+
+The provider contribution is on [`feat/vercel-sandbox`](https://github.com/vercel-labs/agentenv-framework/tree/feat/vercel-sandbox). See the [upstream project README](README.upstream.md) for the broader AgentEnv SDK.
