@@ -1,4 +1,16 @@
-# End-to-end result, October 9, 2026
+# End-to-end results
+
+## October 12, 2026: review fixes
+
+The updated demo completed all five task steps with score **1.0** using an existing Vercel CLI login. It independently verified the environment mutation, stored trajectory and task result, and fresh-provider reconnect. The environment, agent and image builder were removed. Cleanup also succeeded from a fresh saved context after deletion, and subsequent lookups reported all three resources missing.
+
+A separate live probe verified the five-tag cap, preserving `pipeline_step` and `run_id`; refresh of a cached unrestricted policy after another handle changed it; lookup of a stopped sandbox; typed not-found errors after deletion; repeated handle termination; and both cleanup entry points using saved sandbox IDs.
+
+On native Linux, the unit/protocol suite passed **7,250 tests with 9 skips** for root permissions, platform/filesystem differences and the missing optional WebSocket dependency. Package build, frozen-lock validation and clean installation passed; clean installation ran `hello` twice with score 1 and no leftover sandbox work folder. The plugin API check found no break. A focused suite passed **151 tests** with `VERCEL_OIDC_TOKEN` deliberately set to a placeholder, covering credential-test isolation as well as the provider, policy and cleanup changes.
+
+These checks ran against the review-fix candidate based on upstream commit `c70011524ae65fbd35eb2b8292c9560eb81967cc`. The provider code and tests are shared with the upstream contribution; the standalone demo stays on `vercel-demo`.
+
+## October 9, 2026: original evaluation
 
 The reviewed provider completed a real AgentEnv evaluation using project OIDC obtained from an existing Vercel CLI login. No manually created API token or model key was needed.
 

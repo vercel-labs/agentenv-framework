@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import copy
 import hashlib
 import hmac
 import json
@@ -27,6 +28,8 @@ from agent_env.store.document_store import LocalSqliteDocumentStore
 from agent_env.store.object_store import LocalFilesystemObjectStore
 from agent_env.task import Task
 from agent_env.task.teardown import teardown_run
+from agent_env.providers.sandbox_providers.sandbox_provider import SandboxNotFoundError
+from agent_env.task_step.task_steps.teardown_sandboxes import TORN_DOWN_KEY
 from agent_env.task_step.task_steps.deploy_agent import DeployAgentTaskStep
 from agent_env.task_step.task_steps.deploy_env import DeployEnvTaskStep
 from agent_env.task_step.task_steps.load_artifact import LoadArtifactTaskStep
@@ -205,19 +208,24 @@ async def main():
         assert len(report.terminated) == 2 and not report.still_up
         again = await teardown_run(context)
         assert not again.still_up
+        fresh_context = copy.deepcopy(context)
+        fresh_context.metadata.pop(TORN_DOWN_KEY, None)
+        fresh_report = await teardown_run(fresh_context)
+        assert len(fresh_report.terminated) == 2 and not fresh_report.still_up
+        save("fresh-context-teardown.json", asdict(fresh_report))
         await builder.terminate()
         for box in owned:
             try:
                 await fresh.get_sandbox(box.sandbox_id)
-            except Exception as error:
-                assert getattr(error, "status_code", None) == 404, type(error).__name__
+            except SandboxNotFoundError as error:
+                assert getattr(error.__cause__, "status_code", None) == 404
             else:
                 raise AssertionError("Resource still exists after teardown")
         save("success.json", {"status": "passed", "score": score, "steps": 5,
                               "instance_id": context.instance_id, "resources_removed": len(owned),
                               "checks": ["project-oidc", "six-real-images", "task-run", "agent-mcp-tool-call",
                                          "independent-state-read", "trajectory", "persisted-task", "reconnect",
-                                         "repeat-teardown", "lookup-404"], "finished_at": time.time()})
+                                         "repeat-teardown", "fresh-context-teardown", "lookup-404"], "finished_at": time.time()})
         completed = True
         print("PASS cleanup: environment, agent and builder removed; all lookups return 404", flush=True)
         print("END-TO-END EVALUATION PASSED: score 1", flush=True)

@@ -11,7 +11,7 @@ Prerequisites: Git, Python 3.11.4 or newer, uv, Node.js and Vercel CLI 62.5.0 or
 Clone this branch to use the unreleased provider. The published PyPI package does not contain this candidate.
 
 ```bash
-git clone --branch feat/vercel-sandbox https://github.com/vercel-labs/agentenv-framework.git
+git clone --branch vercel-demo https://github.com/vercel-labs/agentenv-framework.git
 cd agentenv-framework
 uv sync --frozen --extra vercel
 export AGENT_ENV_CONFIG="$PWD/examples/vercel-sandbox/config.toml"
@@ -32,7 +32,7 @@ Use a fresh output directory for each attempt; the demo refuses to overwrite an 
   --repo . --output /tmp/agentenv-vercel-e2e-run-1
 ```
 
-The demo creates three temporary sandboxes: an image builder, an environment and an agent. Successful runs remove all three and verify subsequent lookups return 404. Failed runs stop and retain tracked sandboxes and record their identifiers for diagnosis. The runner also records handles reaching its termination guard during setup rollback. Failures before a handle reaches the runner can still follow the provider’s own creation-cleanup behavior. Retained resources are intentionally left for diagnosis; this demo does not automatically reap them.
+The demo creates three temporary sandboxes: an image builder, an environment and an agent. Successful runs remove all three, verify subsequent lookups report them missing, and verify cleanup from a fresh context. Failed runs stop and retain tracked sandboxes and record their identifiers for diagnosis. The runner also records handles reaching its termination guard during setup rollback. Failures before a handle reaches the runner can still follow the provider’s own creation-cleanup behavior. Retained resources are intentionally left for diagnosis; this demo does not automatically reap them.
 
 The image-download fixture serves only disposable test images. Its fixed signing key is public test data; this fixture is not a production artifact store. The demo uses local SQLite and filesystem stores for run records and artifacts, and applies a restricted policy allowing the test package host and Vercel routes to the workload sandboxes. Scale's actual stores and network requirements need their own acceptance run.
 
@@ -59,7 +59,7 @@ The stdout/stderr stream can also be redirected to a local log. Output folders c
 
 ## Review scope
 
-The integration remains in-tree as requested, with optional Python SDK dependencies. CPU and memory are minimum requests rounded to supported shapes; fixed disk sizing is logged. OIDC and explicit configuration credentials are supported. This POC covers ephemeral runs and active reconnect. Persistent resume, credential brokering and model-quality benchmarking are separate work.
+The integration remains in-tree as requested, with optional Python SDK dependencies. CPU and memory are minimum requests rounded to supported shapes; fixed disk sizing is logged. Attribution keeps up to five tags, prioritizing `pipeline_step` and `run_id`, then other keys alphabetically, with a warning naming omitted keys. OIDC and explicit configuration credentials are supported. This POC covers ephemeral runs and active reconnect. Persistent resume, credential brokering and model-quality benchmarking are separate work.
 
 Recorded follow-ups include cleanup of commands still running during teardown, upload retry diagnostics, resource log severity and readiness behavior. Production workload acceptance, actual stores, CPU/memory semantics, optional OIDC and maintenance ownership remain for Scale to confirm.
 
