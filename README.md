@@ -8,7 +8,7 @@ The included demo exercises one complete evaluation: deploy an items environment
 
 Prerequisites: Git, Python 3.11.4 or newer, uv, Node.js and Vercel CLI 62.5.0 or newer (the demo was tested with 62.5.0). Use a Vercel project where you can create 4-vCPU/8-GB sandboxes for the build and environment, plus a 2-vCPU/4-GB agent. The demo builds Linux images in a fresh Vercel sandbox, so local Docker is not needed. Network access to the package and image registries referenced by the repository Dockerfiles is required.
 
-Clone this branch to use the unreleased provider. The published PyPI package does not contain this candidate.
+AgentEnv 0.9.1334 includes the Vercel provider. Clone this branch for the standalone example environment and deterministic agent.
 
 ```bash
 git clone --branch vercel-demo https://github.com/vercel-labs/agentenv-framework.git
