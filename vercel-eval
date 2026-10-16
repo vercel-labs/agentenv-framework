@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Run the AgentEnv Vercel example using an existing Vercel CLI login."""
+
+import argparse
+import os
+from pathlib import Path
+import shutil
+import tempfile
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Each run prints a new temporary directory containing its results and diagnostics.",
+    )
+    parser.add_argument("--scope", required=True, help="Vercel team slug")
+    parser.add_argument("--project", required=True, help="Existing Vercel project name")
+    args = parser.parse_args()
+    repo = Path(__file__).resolve().parent
+    python = repo / ".venv/bin/python"
+    if not python.is_file():
+        parser.error("Install the example first: uv sync --frozen --extra vercel")
+    if shutil.which("vercel") is None:
+        parser.error("Install Vercel CLI 62.5.0 or newer, then run vercel login")
+    example = repo / "examples/vercel-sandbox"
+    output = Path(tempfile.mkdtemp(prefix="agentenv-vercel-")) / "run"
+    environment = dict(os.environ, AGENT_ENV_CONFIG=str(example / "config.toml"))
+    command = [
+        str(python), str(example / "with_vercel_login.py"),
+        "--scope", args.scope, "--project", args.project, "--",
+        str(python), str(example / "run_e2e.py"),
+        "--repo", str(repo), "--output", str(output),
+    ]
+    print(f"Results: {output}", flush=True)
+    os.chdir(repo)
+    os.execve(python, command, environment)
+
+
+if __name__ == "__main__":
+    main()

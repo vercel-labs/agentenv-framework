@@ -14,23 +14,23 @@ AgentEnv 0.9.1334 includes the Vercel provider. Clone this branch for the standa
 git clone --branch vercel-demo https://github.com/vercel-labs/agentenv-framework.git
 cd agentenv-framework
 uv sync --frozen --extra vercel
-export AGENT_ENV_CONFIG="$PWD/examples/vercel-sandbox/config.toml"
 ```
 
-The dedicated config selects Vercel for environments and agents. The demo overrides the document and object stores with local stores in its output directory.
+The launcher selects the dedicated Vercel configuration for environments and agents. The demo uses local stores in its output directory.
 
 ## Run with an existing Vercel login
 
 If needed, run `vercel login`. Choose an existing project and team that you have access to. The wrapper uses the public `vercel project token` command and passes its short-lived OIDC token only to the child process. It does not print the token or write it to disk.
 
-Use a fresh output directory for each attempt; the demo refuses to overwrite an existing one. Keep the dedicated configuration selected above so unrelated settings cannot affect the demo. Do not add explicit `token`, `team_id` or `project_id` fields for this OIDC route.
+From the cloned repository, run:
 
 ```bash
-.venv/bin/python examples/vercel-sandbox/with_vercel_login.py \
-  --scope YOUR_TEAM --project YOUR_PROJECT -- \
-  .venv/bin/python examples/vercel-sandbox/run_e2e.py \
-  --repo . --output /tmp/agentenv-vercel-e2e-run-1
+./vercel-eval --scope YOUR_TEAM --project YOUR_PROJECT
 ```
+
+Replace `YOUR_TEAM` with your team slug and `YOUR_PROJECT` with an existing project name. Each run prints a new temporary output directory for its records and artifacts. The launcher sets `AGENT_ENV_CONFIG` automatically and uses the repository's `.venv` Python. Do not add explicit `token`, `team_id` or `project_id` fields to the dedicated configuration for this OIDC route.
+
+Run `./vercel-eval --help` for usage.
 
 The demo creates three temporary sandboxes: an image builder, an environment and an agent. Successful runs remove all three, verify subsequent lookups report them missing, and verify cleanup from a fresh context. Failed runs stop and retain tracked sandboxes and record their identifiers for diagnosis. The runner also records handles reaching its termination guard during setup rollback. Failures before a handle reaches the runner can still follow the provider’s own creation-cleanup behavior. Retained resources are intentionally left for diagnosis; this demo does not automatically reap them.
 
