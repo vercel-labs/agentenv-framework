@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import logging
-from typing import ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar, Optional
 
+from agent_env.artifact.artifacts.docker_image import pull_problem
+from agent_env.providers.sandbox_providers.chained_sandbox_provider import skip_refusing
 from agent_env.providers.sandbox_providers.sandbox import NetworkPolicy
 from agent_env.task_step.context import DeployedSandbox, TaskStepContext
 from agent_env.task_step.task_step import TaskStep, TaskStepDependency
 from agent_env.attribution import deploy_attribution
+
+if TYPE_CHECKING:
+    from agent_env.providers.sandbox_providers.sandbox_provider import SandboxProvider
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +31,7 @@ class DeploySandboxTaskStep(TaskStep):
         sandbox_name: str,
         sandbox_mode: str,
         image: Optional[str] = None,
-        cpu: float = 2.0,
+        cpu: float = 1.0,
         memory_mb: int = 8192,
         disk_size_gb: float = 10,
         ttl_seconds: int = TaskStep.DEFAULT_TTL_SECONDS,
@@ -83,7 +88,7 @@ class DeploySandboxTaskStep(TaskStep):
             sandbox_name=data["sandbox_name"],
             sandbox_mode=data["sandbox_mode"],
             image=data.get("image"),
-            cpu=data.get("cpu", 2.0),
+            cpu=data.get("cpu", 1.0),
             memory_mb=data.get("memory_mb", 8192),
             disk_size_gb=data.get("disk_size_gb", 10),
             ttl_seconds=data.get("ttl_seconds", TaskStep.DEFAULT_TTL_SECONDS),
@@ -95,6 +100,12 @@ class DeploySandboxTaskStep(TaskStep):
             metadata=dict(data.get("metadata") or {}),
             network_policy=data.get("network_policy"),
         )
+
+    def _pull_refusal(self, link: SandboxProvider) -> str | None:
+        """Why ``link``'s sandboxes can't pull this step's image by name, as a clause on its name, or None when they can."""
+        if problem := pull_problem(self.image, on_this_machine=link.ON_THIS_MACHINE):
+            return f"whose sandboxes pull it by name: {problem}"
+        return None
 
     async def execute(self, context: TaskStepContext) -> TaskStepContext:
         from agent_env.providers.sandbox_providers.sandbox_provider import build_sandbox_provider, get_sandbox_provider
@@ -140,7 +151,8 @@ class DeploySandboxTaskStep(TaskStep):
         else:
             if self.image is None or self.port is None:
                 raise ValueError("container-mode sandbox requires `image` and `port`")
-            sandbox = await provider.create_sandbox(
+            provider = skip_refusing(provider, self._pull_refusal, what=f"sandbox '{self.sandbox_name}'")
+            sandbox = await provider.create_container(
                 image_name=self.image,
                 port=self.port,
                 env=self.env_vars or {},

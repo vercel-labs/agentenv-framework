@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import subprocess
 import uuid
 import dataclasses
 from dataclasses import dataclass
@@ -22,7 +21,7 @@ from agent_env.env import Env, GatewayEnv, MCPServerEnv, MultiEnv
 from agent_env.env.envs.service_db import ServiceDBEnv
 from agent_env.config import get_config
 from agent_env.task import Task, TaskStepStatus
-from agent_env.task_step import AddSkillsTaskStep, BuildMcpCliTaskStep, DeployAgentTaskStep, DeployEnvTaskStep, EnvOutcomeVerifierTaskStep, LoadArtifactTaskStep, PromptAgentTaskStep, RubricsVerifierTaskStep, TaskStep, TaskStepContext, VerifyMCPToolSchemaTaskStep
+from agent_env.task_step import AddSkillsTaskStep, BuildMcpCliTaskStep, DeployAgentTaskStep, DeployEnvTaskStep, EnvOutcomeVerifierTaskStep, LoadArtifactTaskStep, PromptAgentTaskStep, RubricsVerifierTaskStep, TaskStep, TaskStepContext
 from agent_env.task_step.task_step import TaskStepDependency
 from agent_env.a2a_agent import A2AAgent, conversation_store
 from agent_env.a2a_agent.object_transfer import trajectory_mode
@@ -64,7 +63,7 @@ GATEWAY_IMAGE = DockerImageConfig(
     name="gateway",
     dockerfile=ENV_DIR / "gateway" / "Dockerfile",
     tag="env-gateway",
-    context=ENV_DIR,
+    context=ENV_DIR / "gateway",
     service_name="gateway",
 )
 
@@ -279,6 +278,16 @@ def echo_agent() -> A2AAgent:
         id="sail_vm",
         marks=skip_without_remote_sandbox("sail_vm"),
     ),
+    pytest.param(
+        "tensorlake",
+        id="tensorlake",
+        marks=skip_without_remote_sandbox("tensorlake"),
+    ),
+    pytest.param(
+        "tenki",
+        id="tenki",
+        marks=skip_without_remote_sandbox("tenki"),
+    ),
 ])
 def sandbox_provider(request):
     from agent_env.providers import (
@@ -305,6 +314,14 @@ def sandbox_provider(request):
         set_sandbox_provider(build_sandbox_provider("sail_vm"))
         set_env_sandbox_provider(build_sandbox_provider("sail_vm"))
         set_agent_sandbox_provider(build_sandbox_provider("sail_vm"))
+    elif request.param == "tensorlake":
+        set_sandbox_provider(build_sandbox_provider("tensorlake"))
+        set_env_sandbox_provider(build_sandbox_provider("tensorlake"))
+        set_agent_sandbox_provider(build_sandbox_provider("tensorlake"))
+    elif request.param == "tenki":
+        set_sandbox_provider(build_sandbox_provider("tenki"))
+        set_env_sandbox_provider(build_sandbox_provider("tenki"))
+        set_agent_sandbox_provider(build_sandbox_provider("tenki"))
     try:
         yield request.param
     finally:
@@ -1140,7 +1157,7 @@ async def _verify_list_tools(mcp_url: str, tool_verifier_callback: callable):
             if assertion_errors:
                 raise
             if verified:
-                logger.info(f"  Verified (ignoring cleanup error)")
+                logger.info("  Verified (ignoring cleanup error)")
                 break
             logger.info(f"  Attempt {attempt + 1} failed: {type(eg).__name__}")
             if attempt < max_retries - 1:

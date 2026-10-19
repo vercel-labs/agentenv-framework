@@ -6,7 +6,7 @@ import asyncio
 import copy
 import dataclasses
 import logging
-import random
+import secrets
 import string
 import time
 from dataclasses import dataclass, field
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Self
 
 from agent_env.store.base import NotFoundError
 from agent_env.config import get_config
-from agent_env.store.document_store import DocumentStore, DuplicateKeyError, Filter, Lte, Ne, Sort, SortKey, UpdateSpec, VersionedEntityStore, VersionedEntityStoreCache, compare_and_swap
+from agent_env.store.document_store import DocumentStore, DuplicateKeyError, Filter, Lte, Ne, Sort, SortKey, UnknownDocumentTypeError, UpdateSpec, VersionedEntityStore, VersionedEntityStoreCache, compare_and_swap
 from agent_env.store.query import QueryBuilder, to_document_query
 from agent_env.task.step_journal import (
     _RESERVED_STEP_IDS,
@@ -115,7 +115,7 @@ class TaskStore:
         registry = get_task_registry()
         cls = registry.get(task_type)
         if cls is None:
-            raise ValueError(f"Unknown task type: {task_type}")
+            raise UnknownDocumentTypeError(f"Unknown task type: {task_type}")
         return cls.from_dict(doc)
 
     def execute_query(self, query: TaskQuery) -> list[Task]:
@@ -299,7 +299,7 @@ class TaskInstanceStore:
         completed_step_docs = [
             dataclasses.asdict(e) for e in completed_steps or []
         ]
-        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        suffix = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(8))
         instance_id = f"{task_id}-{suffix}"
         created_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         doc = _new_instance_doc(
@@ -554,7 +554,6 @@ class TaskInstanceStore:
             undone_seqs.clear()
             undone_seqs.update({e["step_id"]: e["seq"] for e in entries if e["step_id"] in step_ids})
             before = doc.get("completed_steps", [])
-            completed_ids = {c.get("step_id") for c in before}
             if not any(e["step_id"] == _SEED_STEP_ID for e in entries):
                 raise ValueError(f"instance {instance_id!r} has no journal seed (pre-journal or unseeded); cannot undo")
             journaled = {e["step_id"] for e in entries}

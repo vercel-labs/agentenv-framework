@@ -5,12 +5,15 @@ tar -xzf /tmp/source.tar.gz
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-buildx
 build_one() {
-  docker build -f "$1" -t "$3" "$2" > "/tmp/poc-logs/$3-build.log" 2>&1
+  if ! docker build -f "$1" -t "$3" "$2" > "/tmp/poc-logs/$3-build.log" 2>&1; then
+    cat "/tmp/poc-logs/$3-build.log" >&2
+    exit 1
+  fi
   docker save "$3" | gzip -1 > "/tmp/poc-artifacts/$3.tar.gz"
   docker image inspect "$3" --format '{{.Id}}' > "/tmp/poc-artifacts/$3.image-id"
   echo "BUILT $3"
 }
-build_one src/agent_env/env/gateway/Dockerfile src/agent_env/env poc-gateway
+build_one src/agent_env/env/gateway/Dockerfile src/agent_env/env/gateway poc-gateway
 build_one src/agent_env/env/envs/service_db/Dockerfile src/agent_env/env/envs/service_db poc-db
 build_one src/agent_env/env/envs/service_db/Dockerfile.db-web src/agent_env/env/envs/service_db poc-db-web
 build_one src/agent_env/env/envs/service_db/Dockerfile.db-mcp src/agent_env/env/envs/service_db poc-db-mcp

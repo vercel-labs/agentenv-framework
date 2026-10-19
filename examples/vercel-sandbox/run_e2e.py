@@ -5,6 +5,7 @@ import asyncio
 import copy
 import hashlib
 import hmac
+import importlib.metadata
 import json
 import logging
 import subprocess
@@ -38,6 +39,45 @@ from agent_env.task_step.task_steps.verifiers.agent_prompt_response_verifier imp
 
 HERE = Path(__file__).resolve().parent
 KEY = b"agentenv-poc-public-image-fixture"
+BUILD_TIMEOUT_SECONDS = 1830
+CLIENT_CLOSE_TIMEOUT_SECONDS = 5
+
+
+async def build_progress(started):
+    while True:
+        await asyncio.sleep(30)
+        print(f"Preparing images... {int(time.monotonic() - started)}s elapsed. Build logs are in the results folder.", flush=True)
+
+
+async def run_image_build(builder, stdout, stderr):
+    async with asyncio.timeout(BUILD_TIMEOUT_SECONDS):
+        return await builder._sandbox.run_process(
+            "bash", ["-lc", (HERE / "build_images.sh").read_text()],
+            sudo=True, kill_after=1800, stdout=stdout, stderr=stderr)
+
+
+async def close_clients(clients):
+    async def close(client):
+        try:
+            async with asyncio.timeout(CLIENT_CLOSE_TIMEOUT_SECONDS):
+                await client.close()
+        except Exception as error:
+            logging.getLogger(__name__).warning("Client cleanup failed: %s: %s", type(error).__name__, error)
+
+    await asyncio.gather(*(close(client) for client in clients))
+
+
+def snapshot_sources(repo, output):
+    tracked = subprocess.check_output(
+        ["git", "-C", str(repo), "ls-files", "-z", "--cached"]
+    ).decode().split("\0")
+    tracked = [name for name in tracked if name and (repo / name).is_file()
+               and not any(part.startswith(".env") for part in Path(name).parts)]
+    (output / "source-hashes.json").write_text(json.dumps(
+        {name: hashlib.sha256((repo / name).read_bytes()).hexdigest() for name in tracked}, indent=2) + "\n")
+    with tarfile.open(output / "source.tar.gz", "w:gz") as archive:
+        for name in tracked:
+            archive.add(repo / name, arcname=name, recursive=False)
 
 
 async def main():
@@ -49,20 +89,19 @@ async def main():
     args = parser.parse_args()
     repo, output = args.repo.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    console = logging.StreamHandler()
+    console.setLevel(logging.WARNING)
+    logging.basicConfig(level=logging.INFO, handlers=[
+        logging.FileHandler(output / "run.log"), console,
+    ])
     def save(name, value):
         (output / name).write_text(json.dumps(value, indent=2, default=str) + "\n")
 
-    tracked = subprocess.check_output(
-        ["git", "-C", str(repo), "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
-    ).decode().split("\0")
-    tracked = [name for name in tracked if name and (repo / name).is_file()
-               and not any(part.startswith(".env") for part in Path(name).parts)]
-    save("source-hashes.json", {name: hashlib.sha256((repo / name).read_bytes()).hexdigest() for name in tracked})
-    with tarfile.open(output / "source.tar.gz", "w:gz") as archive:
-        for name in tracked:
-            archive.add(repo / name, arcname=name, recursive=False)
+    version = importlib.metadata.version("agentenv-framework")
+    save("packages.json", {name: importlib.metadata.version(name) for name in (
+        "agentenv-framework", "agentenv-framework-protocol", "vercel-sandbox")})
+    print(f"AgentEnv {version}. This demo uses a deterministic agent to test the integration.", flush=True)
+    snapshot_sources(repo, output)
 
     resources, owned, clients = [], [], []
     phase = "build"
@@ -101,15 +140,19 @@ async def main():
     controller = VercelSandboxProvider.from_config()
     clients.append(controller)
     try:
-        builder = await controller.create_vm(cpu=4, memory=8192, exposed_ports=[8080], timeout=2400)
+        print("[1/3] Preparing six images in Vercel Sandbox. The first build can take several minutes.", flush=True)
+        builder = await controller.create_vm(cpu=4, memory=8192, disk_size_gb=64, exposed_ports=[8080], timeout=2400)
         for source, target in [(output / "source.tar.gz", "/tmp/source.tar.gz"),
                                (HERE / "fixture_agent.py", "/tmp/fixture_agent.py"),
                                (HERE / "artifact_server.py", "/tmp/artifact_server.py")]:
             await builder.write_host_file(source.read_bytes(), target)
         with (output / "build.stdout").open("w") as stdout, (output / "build.stderr").open("w") as stderr:
-            result = await builder._sandbox.run_process(
-                "bash", ["-lc", (HERE / "build_images.sh").read_text()],
-                sudo=True, kill_after=1800, stdout=stdout, stderr=stderr)
+            progress = asyncio.create_task(build_progress(time.monotonic()))
+            try:
+                result = await run_image_build(builder, stdout, stderr)
+            finally:
+                progress.cancel()
+                await asyncio.gather(progress, return_exceptions=True)
         save("build-command.json", {"command_id": result.id, "session_id": result.session_id,
                                     "exit_code": result.returncode})
         assert result.returncode == 0, "Image build failed; see build logs and retained builder"
@@ -154,12 +197,12 @@ async def main():
                                                 content_type="application/json"))
         task = Task.put(id="vercel-review", steps=[
             DeployEnvTaskStep(id="environment", version=None, env_id=env.id, env_version=env.version,
-                              sandbox_type="vercel", ttl_seconds=1800, cpu=4, memory_mb=8192),
+                              sandbox_type="vercel", ttl_seconds=1800, cpu=4, memory_mb=8192, disk_size_gb=64),
             LoadArtifactTaskStep(id="seed", version=None, env_id=env.id, artifact_id=seed.id,
                                  artifact_version=seed.version, snapshot_after_load=False),
             DeployAgentTaskStep(id="agent", version=None, env_ids=[env.id], a2a_agent_id=agent.id,
                                 a2a_agent_version=agent.version, sandbox_type="vercel",
-                                ttl_seconds=1800, cpu=2, memory_mb=4096),
+                                ttl_seconds=1800, cpu=2, memory_mb=4096, disk_size_gb=64),
             PromptAgentTaskStep(id="ask", version=None, prompt="vercel-review-complete", prompt_id="ask",
                                 timeout_seconds=120),
             AgentPromptResponseVerifierTaskStep(id="grade", version=None, prompt_id="ask", verifier_id="result",
@@ -168,6 +211,7 @@ async def main():
         ])
         save("task.json", task.to_dict())
         phase = "task"
+        print("[2/3] Running the evaluation: deploy environment, load data, deploy agent, call tools, score.", flush=True)
         def step_done(index, total, step, context, elapsed):
             print(f"STEP {index + 1}/{total} {step.id} completed in {elapsed:.1f}s", flush=True)
             save("context.json", context.to_safe_dict())
@@ -185,6 +229,7 @@ async def main():
         assert deployed_env.sandbox_id != deployed_agent.sandbox_id
         trajectory = context.prompt_responses[0].agent_trajectory_object_url
         assert trajectory and store.get(trajectory), "Agent trajectory was not collected"
+        (output / "trajectory.json").write_bytes(store.get(trajectory))
         print("PASS actual Task.run: five steps, score 1, trajectory collected", flush=True)
 
         fresh = VercelSandboxProvider.from_config()
@@ -202,7 +247,19 @@ async def main():
         if restored._sandbox:
             await restored._sandbox._client.aclose()
 
+        transfer = await builder.exec("python3", "-c", "import sys; sys.stdout.write('x' * 2097152); sys.stderr.write('y' * 2097152)")
+        assert await transfer.wait() == 0
+        for reader, expected in ((transfer.stdout, b"x"), (transfer.stderr, b"y")):
+            count = 0
+            while chunk := await reader.read(65536):
+                assert chunk == expected * len(chunk)
+                count += len(chunk)
+            assert count == 2097152
+        print("PASS command output: both streams remain readable after completion", flush=True)
+
         cleanup = True
+        phase = "cleanup"
+        print("[3/3] Removing the three sandboxes and checking cleanup.", flush=True)
         report = await teardown_run(context)
         save("teardown.json", asdict(report))
         assert len(report.terminated) == 2 and not report.still_up
@@ -213,7 +270,15 @@ async def main():
         fresh_report = await teardown_run(fresh_context)
         assert len(fresh_report.terminated) == 2 and not fresh_report.still_up
         save("fresh-context-teardown.json", asdict(fresh_report))
-        await builder.terminate()
+        running = await builder.exec("bash", "-c", "printf 'ready\\n'; sleep 60")
+        assert await asyncio.wait_for(running.stdout.readline(), 30) == b"ready\n"
+        await (await fresh.get_sandbox(builder.sandbox_id)).terminate()
+        try:
+            await asyncio.wait_for(running.wait(), 15)
+        except asyncio.CancelledError:
+            pass
+        assert not builder._processes
+        assert await asyncio.wait_for(running.stdout.read(), 15) == b""
         for box in owned:
             try:
                 await fresh.get_sandbox(box.sandbox_id)
@@ -225,25 +290,38 @@ async def main():
                               "instance_id": context.instance_id, "resources_removed": len(owned),
                               "checks": ["project-oidc", "six-real-images", "task-run", "agent-mcp-tool-call",
                                          "independent-state-read", "trajectory", "persisted-task", "reconnect",
-                                         "repeat-teardown", "fresh-context-teardown", "lookup-404"], "finished_at": time.time()})
+                                         "repeat-teardown", "fresh-context-teardown", "lookup-404",
+                                         "completed-output-read", "running-command-teardown"], "finished_at": time.time()})
         completed = True
         print("PASS cleanup: environment, agent and builder removed; all lookups return 404", flush=True)
         print("END-TO-END EVALUATION PASSED: score 1", flush=True)
+        print(f"Run: {context.instance_id}\nResult: {output / 'success.json'}\nAgent actions: {output / 'trajectory.json'}\nCleanup: all three sandboxes removed.", flush=True)
     finally:
         if not completed:
+            save("failure.json", {"status": "failed", "phase": phase, "resources": resources})
             for box in owned:
+                if box is owned[0]:
+                    try:
+                        build_logs = await asyncio.wait_for(
+                            box.exec_script("cat /tmp/poc-logs/* 2>/dev/null || true"), 15)
+                        (output / "image-builds.log").write_text(build_logs)
+                    except Exception as error:
+                        print("Build log collection:", type(error).__name__, flush=True)
                 try:
-                    processes = await box._sandbox.query_processes()
+                    processes = await asyncio.wait_for(box._sandbox.query_processes(), 15)
                     save(box.sandbox_id + "-processes.json", [
                         {"id": p.id, "returncode": p.returncode} for p in processes])
-                    await box._sandbox.stop()
+                except Exception as error:
+                    print("Process log collection:", box.sandbox_id, type(error).__name__, flush=True)
+                try:
+                    await asyncio.wait_for(box._sandbox.stop(), 30)
                     print("STOPPED AND RETAINED", box.sandbox_id, flush=True)
                 except Exception as error:
                     print("Retention check:", box.sandbox_id, type(error).__name__, flush=True)
+            print(f"Evaluation did not finish. Diagnostics: {output}\nCheck build.stdout/build.stderr for image errors and resources.json for retained sandboxes.\nRerun the same command after resolving the error; each attempt keeps its own results.", flush=True)
         VercelSandboxProvider.create_vm = create_vm
         VercelSandbox.terminate = terminate
-        for client in clients:
-            await client.close()
+        await close_clients(clients)
 
 
 if __name__ == "__main__":

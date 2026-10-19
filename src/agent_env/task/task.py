@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, ClassVar, Optional
 
 from agent_env.plugins import _registration
+from agent_env.store.document_store import UnknownDocumentTypeError
 from agent_env.store.routing import run_scope
 from agent_env.task_step.context import TaskStepContext, regraft_redacted_keys
 from agent_env.task_step.context_ops import ContextUpdateOps, build_context_update_ops
@@ -96,7 +97,6 @@ def substitute_seed_in_steps(steps: list["TaskStep"], seed: dict) -> list["TaskS
     objects, so it executes exactly what the original run executed."""
     if not seed:
         return list(steps)
-    from agent_env.task_step.registry import get_task_step_registry
 
     def _sub(value):
         if isinstance(value, str):
@@ -111,12 +111,23 @@ def substitute_seed_in_steps(steps: list["TaskStep"], seed: dict) -> list["TaskS
 
     from agent_env.task_step.task_step import attach_retry_config
 
-    registry = get_task_step_registry()
     out: list["TaskStep"] = []
     for step in steps:
         data = _sub(step.to_dict())
-        out.append(attach_retry_config(registry[step.type].from_dict(data), data))
+        out.append(attach_retry_config(type(step).from_dict(data), data))
     return out
+
+
+def recorded_scores(steps: list["TaskStep"], context: TaskStepContext) -> dict[str, float]:
+    """Every score a run of ``steps`` recorded, by the id of the step that recorded it, or by its verification's key
+    when that isn't a step's verifier id."""
+    step_ids = {step.verifier_id: step.id for step in steps if getattr(step, "verifier_id", None)}
+    scores = {}
+    for key, verification in (context.metadata.get("verifications") or {}).items():
+        score = verification.get("score")
+        if isinstance(score, (int, float)):
+            scores[step_ids.get(key, key)] = float(score)
+    return scores
 
 
 def _dependency_ids(steps: list["TaskStep"]) -> dict[str, set[str]]:
@@ -375,7 +386,7 @@ class Task:
             step_type = step_dict["type"]
             step_cls = registry.get(step_type)
             if step_cls is None:
-                raise ValueError(
+                raise UnknownDocumentTypeError(
                     f"Unknown task step type: {step_type}{_registration.failure_note(_registration.TASK_STEPS, step_type)}"
                 )
             from agent_env.task_step.task_step import attach_retry_config

@@ -350,6 +350,14 @@ class PromptAgentTaskStep(TaskStep):
                 f"after turn {cfg.max_snapshots} and the rest are recorded as skipped"
             )
 
+    def _resolve_model_and_effort(self, context: TaskStepContext) -> tuple[Optional[str], Optional[str]]:
+        """Model and effort for this run: this step's ``step_overrides`` win over the run-wide ``agent_model`` / ``agent_effort`` and the stored values."""
+        step_overrides = self.step_param_overrides(context)
+        overrides = context.metadata.get("user_overrides", {})
+        model = step_overrides.get("model") or context.agent_model or self.model or context.default_agent_model
+        effort = step_overrides.get("effort") or overrides.get("agent_effort") or self.effort
+        return model, effort
+
     async def execute(self, context: TaskStepContext) -> TaskStepContext:
         # A changelog staged on the agent moves into the store while it works, and the rest when it is done.
         async with draining(staged_changelogs(context.metadata, agent_name=self.agent_name)):
@@ -411,10 +419,9 @@ class PromptAgentTaskStep(TaskStep):
         initial_parts = self._apply_seed(self._effective_parts(), seed)
         prompt_text = initial_parts[0]["text"] if self.prompt is not None else None
 
-        model = context.agent_model or self.model or context.default_agent_model
+        model, effort = self._resolve_model_and_effort(context)
         harness = context.agent_harness or self.harness
         overrides = context.metadata.get("user_overrides", {})
-        effort = overrides.get("agent_effort") or self.effort
         max_thinking_tokens = overrides.get("agent_max_thinking_tokens") or self.max_thinking_tokens
         max_turns = overrides.get("agent_max_turns") or self.max_turns
 
@@ -483,6 +490,9 @@ class PromptAgentTaskStep(TaskStep):
 
         current_user_parts = initial_parts
         final_terminal = protocol.TerminalResponse(response_text="")
+        # Each turn's terminal reports only that turn's tool calls, so the conversation's count is
+        # their sum. None until a turn reports one, so agents that don't report it stay None.
+        conversation_tool_call_count: Optional[int] = None
         final_task_id = ""
         per_turn_trajectory_urls: list[str | None] = []
         source_agent_per_turn_prompt_parts: list[list[dict] | None] = []
@@ -537,6 +547,8 @@ class PromptAgentTaskStep(TaskStep):
                         live_turn.ended(target_state)
                 status_msg = (result.get("status") or {}).get("message") or {}
                 final_terminal = protocol.TerminalResponse.from_message(status_msg)
+                if final_terminal.tool_call_count is not None:
+                    conversation_tool_call_count = (conversation_tool_call_count or 0) + final_terminal.tool_call_count
                 agent_response_parts = status_msg.get("parts") or [{"kind": "text", "text": final_terminal.response_text}]
 
                 conversation_store.complete_a2a_task(
@@ -620,7 +632,7 @@ class PromptAgentTaskStep(TaskStep):
                 user_msg = (user_result.get("status") or {}).get("message") or {}
                 current_user_parts = user_msg.get("parts") or []
                 if not current_user_parts:
-                    logger.warning(f"user_a2a_url returned no parts; ending multi-turn")
+                    logger.warning("user_a2a_url returned no parts; ending multi-turn")
                     conversation_store.mark_closed(conversation_id)
                     break
 
@@ -706,7 +718,7 @@ class PromptAgentTaskStep(TaskStep):
             agent_trajectory_object_prefix=trajectory_output_prefix,
             target_agent_per_turn_trajectory_object_urls=per_turn_trajectory_urls or None,
             source_agent_per_turn_prompt_parts=source_agent_per_turn_prompt_parts or None,
-            tool_call_count=final_terminal.tool_call_count,
+            tool_call_count=conversation_tool_call_count,
             model=model,
             error_type=final_terminal.error_type,
             error_code=final_terminal.error_code,
@@ -912,6 +924,8 @@ class PromptAgentTaskStep(TaskStep):
         for t in state.get("triggers", []):
             # `pending` too: the queue itself, not a label, so it outlives a status we do not know.
             if t.get("status") not in TRIGGER_IN_FLIGHT_STATUSES and not t.get("pending"):
+                continue
+            if t.get("waiting"):  # waiting out a delay or its executor's hours, which can outlast the poll
                 continue
             when = t.get("when")
             if when is None:

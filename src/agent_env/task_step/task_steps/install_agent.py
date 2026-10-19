@@ -17,11 +17,13 @@ import json
 import logging
 import shlex
 from datetime import datetime, timezone
-from typing import Any, Callable, ClassVar, Optional
+from typing import Callable, ClassVar, Optional
 
 import httpx
 
+from agent_env.a2a_agent import A2AAgent
 from agent_env.providers.sandbox_providers.local_sandbox import host_url_for
+from agent_env.store.base import NotFoundError
 from agent_env.task_step.context import DeployedAgent, TaskStepContext
 from agent_env.entity_refs import EntityRef
 from agent_env.task_step.task_step import TaskStep, TaskStepDependency
@@ -33,6 +35,16 @@ INSTALL_COMMANDS_HOST_KEY = "install_commands_host"
 REQUIRED_PARAMS_KEY = "required_params"
 REQUIRED_PARAMS_HOST_KEY = "required_params_host"
 A2A_PORT_KEY = "a2a_port"
+
+
+def _install_problem(agent: A2AAgent) -> str | None:
+    """Why ``agent`` can't be installed, or None: install/v1 copies the agent's source files from its image's build
+    context, which an image registered by reference has none of."""
+    if agent.docker_image_artifact.build_context_object_url:
+        return None
+    return (f"Agent {agent.id} v{agent.version} has no build_context_object_url on its docker_image_artifact; "
+            "install/v1 needs the build context (agent source files) to install into the task container")
+
 
 def _build_param_resolvers(
     *,
@@ -84,6 +96,8 @@ def _build_param_resolvers(
         # Config-sourced (from agent-env config)
         "litellm_api_key":   lambda: litellm_api_key_override or config.get_litellm_api_key(),
         "litellm_base_url":  lambda: host_url_for(config.get_litellm_base_url(), sandbox_type),
+        # A JSON object, {} when [model.headers] is unset.
+        "litellm_extra_headers": lambda: json.dumps(config.get_model_headers(config.get_litellm_base_url())),
     }
 
 
@@ -140,8 +154,17 @@ class InstallAgentTaskStep(TaskStep):
             workspace_dir=data.get("workspace_dir"),
         )
 
+    def preflight(self) -> list[str]:
+        """An agent with no build context to install, reported at save instead. One the store can't give is left to the
+        run, whose ``a2a_agent_id`` override can name another, so a task saved naming a placeholder still saves."""
+        try:
+            agent = A2AAgent.get(self.a2a_agent_id, self.a2a_agent_version)
+        except (NotFoundError, ValueError, KeyError, TypeError):
+            return []
+        problem = _install_problem(agent)
+        return [f"install_agent '{self.id}': {problem}"] if problem else []
+
     async def execute(self, context: TaskStepContext) -> TaskStepContext:
-        from agent_env.a2a_agent import A2AAgent
         from agent_env.providers.sandbox_providers.sandbox_provider import (
             SANDBOX_MODE_VM,
             build_sandbox_provider,
@@ -187,11 +210,8 @@ class InstallAgentTaskStep(TaskStep):
         user_overrides = context.metadata.get("user_overrides", {})
         a2a_agent_id = user_overrides.get("a2a_agent_id") or self.a2a_agent_id
         agent = A2AAgent.get(a2a_agent_id, self.a2a_agent_version)
-        if not agent.docker_image_artifact.build_context_object_url:
-            raise RuntimeError(
-                f"Agent {agent.id} v{agent.version} has no build_context_object_url on its docker_image_artifact; "
-                f"install/v1 needs the build context (agent source files) to install into the task container"
-            )
+        if problem := _install_problem(agent):
+            raise RuntimeError(problem)
 
         logger.info(f"Loading agent image {agent.docker_image_artifact.image_name} onto VM (needed to read agent card)...")
         await sandbox.load_docker_images([agent.docker_image_artifact])
@@ -272,7 +292,8 @@ class InstallAgentTaskStep(TaskStep):
                     f"{commands_key}[{i-1}] references undeclared placeholder {{{e.args[0]}}}; "
                     f"add it to the extension's required_params"
                 )
-            logger.info(f"  [{i}/{len(install_commands)}] {formatted.splitlines()[0][:140]}")
+            # The template, not the command: resolved params carry the model key and headers.
+            logger.info(f"  [{i}/{len(install_commands)}] {cmd.splitlines()[0][:140]}")
             await sandbox.exec_script(formatted)
         if not host_mode:  # copied into the container; a host install may run from it
             await sandbox.exec_script(f"rm -rf {shlex.quote(work_dir)}")

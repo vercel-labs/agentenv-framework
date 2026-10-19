@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import random
+import secrets
 import string
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Optional, Self, TypeVar
@@ -18,6 +18,7 @@ from agent_env.store.document_store import (
     Filter,
     LteOrAbsent,
     Sort,
+    UnknownDocumentTypeError,
     UpdateSpec,
     VersionedEntityStore,
     VersionedEntityStoreCache,
@@ -156,7 +157,7 @@ class EnvStore:
         registry = get_env_registry()
         cls = registry.get(env_type)
         if cls is None:
-            raise ValueError(f"Unknown env type: {env_type}{_registration.failure_note(_registration.ENVS, env_type)}")
+            raise UnknownDocumentTypeError(f"Unknown env type: {env_type}{_registration.failure_note(_registration.ENVS, env_type)}")
         return cls.from_dict(doc)
 
     def execute_query(self, query: EnvQuery) -> list[Env]:
@@ -209,7 +210,7 @@ class EnvInstanceStore:
         """Persist a deployed env as an instance record. Returns a new DeployedEnv with instance_id set."""
         from agent_env.env.env import DeployedEnv as DeployedEnvCls
 
-        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        suffix = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(8))
         instance_id = f"{deployed_env.env_id}-{suffix}"
         now = datetime.now(timezone.utc)
         created_at_utc = now.strftime("%Y-%m-%d %H:%M UTC")

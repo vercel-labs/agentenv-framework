@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Callable, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +17,16 @@ _SNAPSHOT_AFTER_LOAD_ENV_VAR = "AGENT_ENV_SNAPSHOT_AFTER_LOAD"
 # behaviour, or hold it fixed while bisecting a contention problem.
 _LOAD_CONCURRENCY_ENV_VAR = "AGENT_ENV_LOAD_CONCURRENCY"
 
+# `nproc` is GNU coreutils; macOS has only `getconf`.
+_CORE_COUNT_PROBE = "nproc 2>/dev/null || getconf _NPROCESSORS_ONLN"
+
 def _snapshot_after_load_default() -> bool:
     return os.environ.get(_SNAPSHOT_AFTER_LOAD_ENV_VAR, "").strip().lower() in ("1", "true", "yes")
 
 if TYPE_CHECKING:
     from agent_env.artifact import EnvironmentArtifact, EnvironmentUniverseArtifact
     from agent_env.bundle.authoring import AuthoringContext
+    from agent_env.env.env import DeployedEnv, LoadEnvironmentUniverseArtifactResult, LoadFileArtifactUniverseResult
     from agent_env.providers.env_state import DatabaseStateProvider
 
 from agent_env.entity_refs import EntityRef
@@ -474,7 +478,7 @@ class MultiEnv(Env):
         cores = None
         if self._sandbox is not None:
             try:
-                cores = int((await self._sandbox.exec_script("nproc")).strip())
+                cores = int((await self._sandbox.exec_script(_CORE_COUNT_PROBE)).strip())
             except Exception as e:  # noqa: BLE001 — a probe, not a dependency
                 logger.warning("Could not read sandbox core count (%s); loading all %d services at once", e, total)
         if not cores or cores < 1:

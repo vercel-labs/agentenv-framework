@@ -71,7 +71,8 @@ class LauncherTest(unittest.TestCase):
         for _ in range(2):
             result = self.run_launcher("--scope", "team", "--project", "project")
             self.assertEqual(result.returncode, 0, result.stderr)
-            location, payload = result.stdout.splitlines()
+            location, target, payload = result.stdout.splitlines()
+            self.assertIn("team/project", target)
             output = Path(location.removeprefix("Results: "))
             self.assertFalse(output.exists())
             self.assertTrue(output.parent.is_dir())

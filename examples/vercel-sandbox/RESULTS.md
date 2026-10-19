@@ -1,5 +1,17 @@
 # End-to-end results
 
+## October 18, 2026: launcher and provider reliability
+
+The example now follows upstream commit `7ca617eb002055af0fd846f0c9c6f3758519631e` (AgentEnv 0.9.1334), with provider reliability fixes in this source checkout. Those fixes require upstream review and release before they are available from PyPI.
+
+A live run using `./vercel-eval` and an existing Vercel CLI login built six images, completed all five task steps with score **1.0**, and passed 13 integration checks. These include the actual MCP mutation, stored trajectory, independent state read, reconnect, repeated cleanup, reading 2 MiB from each completed output stream, and terminating a running command through a fresh sandbox handle. All three successful-run sandboxes were removed and subsequent lookups confirmed they were missing.
+
+The unit/protocol suite passed **8,398 tests with 20 skips** on macOS. Eleven launcher, login and runner tests passed, covering setup errors, configuration isolation, token-response errors, cancellation of a stalled image build, exclusion of untracked files from uploads and client cleanup that preserves the evaluation result. The provider regressions cover queued-output memory, long lines, local deadlines, command cancellation across handles and teardown-provider closure with a deadline and without masking the original result.
+
+The first run after the upstream sync exposed a changed gateway image-build context. The context was corrected; subsequent live runs passed. The failed builder was stopped and retained for diagnosis. The launcher now reports progress, saves the trajectory and detailed logs directly in its output folder, and prints recovery instructions. Image-build failures preserve the available build logs.
+
+These results validate the deterministic example. Model quality, Scale's production workloads and stores, and controller-crash recovery still need separate acceptance testing. Historical runs below describe earlier revisions.
+
 ## October 12, 2026: review fixes
 
 The updated demo completed all five task steps with score **1.0** using an existing Vercel CLI login. It independently verified the environment mutation, stored trajectory and task result, and fresh-provider reconnect. The environment, agent and image builder were removed. Cleanup also succeeded from a fresh saved context after deletion, and subsequent lookups reported all three resources missing.
@@ -30,6 +42,6 @@ The publication candidate is based on upstream commit `c70011524ae65fbd35eb2b829
 
 Earlier broad verification on base `6e20760bebacd73ebb74e8add0bd69407b24baa4`: 6,810 unit/protocol passes with 9 declared skips, 83 provider-specific passes, all 60 installer cases passed across two runs, build and clean installation passed. These historical results do not establish the outcome of the broader suite on the newer base. See the upstream PR for current validation and CI status.
 
-This is a deterministic integration evaluation. It does not benchmark a language model or establish acceptance of Scale's production workloads, image/object stores, mixed-provider setup, persistence or credential brokering. Maintainers should review the documented CPU/memory minimum semantics, OIDC option, operational ownership and recorded provider follow-ups, particularly commands still running during teardown and upload retry diagnostics.
+This is a deterministic integration evaluation. It does not benchmark a language model or establish acceptance of Scale's production workloads, image/object stores, mixed-provider setup, persistence or credential brokering. Maintainers should review the documented CPU/memory minimum semantics, OIDC option and operational ownership. The October 18 checks above cover commands still running during teardown; upload retry diagnostics remain outside this evaluation.
 
 Private run logs, deployment coordinates, local state and diagnostic resource identifiers are excluded from the repository. The demo scripts produce those records for each reviewer's own run.

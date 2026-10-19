@@ -32,6 +32,7 @@ def main():
         "--repo", str(repo), "--output", str(output),
     ]
     print(f"Results: {output}", flush=True)
+    print(f"Running the AgentEnv demo on {args.scope}/{args.project} (no model API key needed).", flush=True)
     os.chdir(repo)
     os.execve(python, command, environment)
 
